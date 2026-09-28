@@ -7,6 +7,7 @@ module.exports = (async () => {
   const ids = factory.PROVIDER_IDS;
   A.ok(ids.indexOf('openrouter') >= 0, 'openrouter is registered');
   A.ok(ids.indexOf('codex') >= 0, 'codex is registered');
+  A.ok(ids.indexOf('claude-code') >= 0, 'claude-code is registered');
   A.ok(ids.indexOf('openai') >= 0, 'openai is registered');
   A.ok(ids.indexOf('anthropic') >= 0, 'anthropic is registered');
   A.ok(ids.indexOf('gemini') >= 0, 'gemini is registered');
@@ -21,6 +22,7 @@ module.exports = (async () => {
   A.eq(factory.normalizeProviderId('openai-codex', ''), 'codex', 'codex alias normalizes');
   A.eq(factory.normalizeProviderId('openai-compatible', ''), 'custom', 'custom alias normalizes');
   A.eq(factory.normalizeProviderId('claude', ''), 'anthropic', 'anthropic alias normalizes');
+  A.eq(factory.normalizeProviderId('claude-code', ''), 'claude-code', 'claude-code stays distinct from anthropic');
   A.eq(factory.normalizeProviderId('google-ai', ''), 'gemini', 'gemini alias normalizes');
   // 'grok' is now the OAuth (subscription) Grok id; the API-key Grok keeps 'x-ai'/'xai'.
   A.eq(factory.normalizeProviderId('grok', ''), 'grok', 'grok is the OAuth Grok id');
@@ -33,6 +35,8 @@ module.exports = (async () => {
   A.eq(factory.normalizeProviderId('sonar', ''), 'perplexity', 'Perplexity alias normalizes');
   A.eq(factory.normalizeProviderId('', 'openrouter'), 'openrouter', 'fallback is honored');
   A.eq(factory.defaultReasoningEffortForProvider('codex'), 'low', 'codex default reasoning');
+  A.eq(factory.providerRequiresKey('claude-code'), false, 'claude-code needs no API key');
+  A.eq(factory.providerUsesLocalSubscription('claude-code'), true, 'claude-code is a local-subscription provider');
   A.eq(factory.defaultReasoningEffortForProvider('ollama'), 'none', 'ollama default reasoning');
   A.eq(factory.providerRequiresKey('openai'), true, 'openai requires a key');
   A.eq(factory.providerRequiresKey('anthropic'), true, 'anthropic requires a key');
@@ -203,6 +207,14 @@ module.exports = (async () => {
     A.eq((await wireFor('deepseek', null, false)).max_tokens, undefined, 'hosted casual chat gets no new cap');
     A.eq((await wireFor('deepseek')).max_tokens, undefined, 'a hosted OpenAI-compatible run sends no max_tokens');
   }
+
+  const claudeCode = factory.selectProvider({ provider: 'claude-code', spawn: () => { throw new Error('not invoked by construction'); }, executable: 'claude-test' });
+  A.ok(claudeCode && typeof claudeCode.stream === 'function' && typeof claudeCode.healthCheck === 'function', 'factory returns Claude Code local adapter');
+  A.eq(claudeCode.supportsTools('sonnet'), false, 'Claude Code v0.1 factory adapter is tool-less');
+  const claudeProfile = factory.getProviderProfile('claude-code');
+  A.eq(claudeProfile.authType, 'local_subscription', 'Claude Code uses local-subscription auth');
+  A.eq(claudeProfile.unmetered, true, 'Claude Code subscription is unmetered in StarNet billing');
+  A.eq(claudeProfile.supportsTools, false, 'Claude Code registry does not claim StarNet tool support');
 
   const anthropic = factory.selectProvider({ provider: 'anthropic', fetch: async () => new Response('', { status: 200 }) });
   A.ok(anthropic && typeof anthropic.stream === 'function', 'factory returns Anthropic adapter');
