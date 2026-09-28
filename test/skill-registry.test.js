@@ -46,12 +46,14 @@ const { makeSkillRegistry, compareSemver, compareInstalled } = require('../sidec
     { name: 'newer', version: '1.1.0', digest: 'bbb' },
     { name: 'drift', version: '1.0.0', digest: 'ccc' },
     { name: 'older', version: '0.9.0', digest: 'ddd' },
-    { name: 'fresh', version: '1.0.0', digest: 'eee' }
+    { name: 'fresh', version: '1.0.0', digest: 'eee' },
+    { name: 'diverged', version: '1.0.0', digest: 'fff' }
   ], [
     { id: 'same', name: 'same', sourceVersion: '1.0.0', packageDigest: 'aaa' },
     { id: 'newer', name: 'newer', sourceVersion: '1.0.0', packageDigest: 'old' },
     { id: 'drift', name: 'drift', sourceVersion: '1.0.0', packageDigest: 'old' },
-    { id: 'older', name: 'older', sourceVersion: '1.0.0', packageDigest: 'old' }
+    { id: 'older', name: 'older', sourceVersion: '1.0.0', packageDigest: 'old' },
+    { id: 'diverged', name: 'diverged', sourceVersion: '1.0.0', packageDigest: 'fff', packageDiverged: true }
   ]);
   const statuses = Object.fromEntries(compared.map(row => [row.name, row.status]));
   A.eq(statuses.same, 'current', 'matching package digest is current');
@@ -59,5 +61,6 @@ const { makeSkillRegistry, compareSemver, compareInstalled } = require('../sidec
   A.eq(statuses.drift, 'changed', 'same version with different bytes is surfaced as changed');
   A.eq(statuses.older, 'older', 'older registry version does not masquerade as an update');
   A.eq(statuses.fresh, 'not-installed', 'uninstalled registry entries remain distinct');
+  A.eq(statuses.diverged, 'changed', 'local package divergence is never reported as current even when the last sealed digest matches');
   A.report('skill-registry.test.js');
 })().catch(e => { console.error(e && e.stack || e); process.exit(1); });
