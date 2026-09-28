@@ -7,6 +7,7 @@
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { redact } = require('../context.js');
 
 const PROVIDER_ID = 'claude-code';
 const MODEL_ID = 'sonnet';
@@ -27,6 +28,7 @@ const BASE_ARGS = Object.freeze([
   '--no-session-persistence',
   '--disable-slash-commands',
   '--no-chrome',
+  '--prompt-suggestions', 'false',
   '--system-prompt', FIXED_SYSTEM_PROMPT
 ]);
 
@@ -89,15 +91,26 @@ function spawnChild(spawnImpl, executable, args, opts) {
       shell: false,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: sanitizedEnv()
+      env: sanitizedEnv(),
+      // POSIX: make Claude the leader of an owned process group so cancellation can terminate descendants too.
+      // Windows uses taskkill /T below instead.
+      detached: process.platform !== 'win32'
     }, opts || {}));
   } catch (e) {
     throw codedError('CLAUDE_CODE_NOT_AVAILABLE', 'Claude Code could not be started.', e);
   }
 }
 
+function safeErrorText(text) {
+  let s = '';
+  try { s = String(redact(String(text || '')) || ''); } catch (_) { s = String(text || ''); }
+  // Error surfaces need a bounded single-line diagnostic, not raw CLI stderr.
+  return s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000);
+}
+
 function classifyFailure(text, fallbackCode) {
-  const s = String(text || '').toLowerCase();
+  const safe = safeErrorText(text);
+  const s = safe.toLowerCase();
   if (/not logged in|not signed in|login required|authenticate|authentication/.test(s)) {
     return codedError('CLAUDE_CODE_NOT_AUTHENTICATED', 'Claude Code is not authenticated with a supported claude.ai subscription.');
   }
@@ -107,7 +120,7 @@ function classifyFailure(text, fallbackCode) {
   if (/usage.?limit|subscription.?limit|limit reached|quota|allowance/.test(s)) {
     return codedError('CLAUDE_CODE_SUBSCRIPTION_LIMIT', 'Claude Code subscription allowance is unavailable.');
   }
-  return codedError(fallbackCode || 'CLAUDE_CODE_PROCESS_FAILED', String(text || 'Claude Code process failed.').trim());
+  return codedError(fallbackCode || 'CLAUDE_CODE_PROCESS_FAILED', safe || 'Claude Code process failed.');
 }
 
 function safeAuthShape(raw, version) {
@@ -205,7 +218,13 @@ function killTree(child, spawnImpl) {
       });
       if (killer && typeof killer.unref === 'function') killer.unref();
     } else {
-      try { process.kill(child.pid, 'SIGTERM'); } catch (_) { child.kill && child.kill('SIGTERM'); }
+      let groupSignalled = false;
+      try { process.kill(-child.pid, 'SIGTERM'); groupSignalled = true; }
+      catch (_) { try { child.kill && child.kill('SIGTERM'); } catch (_) {} }
+      if (groupSignalled) {
+        const force = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {} }, 1500);
+        if (force && typeof force.unref === 'function') force.unref();
+      }
     }
   } catch (_) {
     try { child.kill && child.kill(); } catch (_) {}
@@ -380,5 +399,5 @@ module.exports = {
   renderPrompt,
   normalizeUsage,
   makeClaudeCodeProvider,
-  _internals: { parseJsonLine, classifyFailure, safeAuthShape, killTree, codedError }
+  _internals: { parseJsonLine, classifyFailure, safeErrorText, safeAuthShape, killTree, codedError }
 };
