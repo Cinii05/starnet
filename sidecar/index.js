@@ -311,7 +311,7 @@ const skillGuard = require('./skills/guard.js');            // guard scanner for
 const { makeSkillGate, digestOf: skillDigestOf } = require('./skills/gate.js');   // the CONSUMER of that verdict: may the model read this skill?
 const { makeSkillExchange } = require('./skills/exchange.js');
 const { makeSkillDocumentFetcher, makeSkillPackageFetcher } = require('./skills/exchange-fetch.js');
-const { makeSkillRegistry } = require('./skills/registry.js');
+const { makeSkillRegistry, compareInstalled: compareInstalledRegistrySkills } = require('./skills/registry.js');
 const { makeSkillMetrics } = require('./skills/metrics.js');
 const skillReview = require('./skillreview.js');            // background skill maintenance trigger/prompt
 const { makeVerdictReview } = require('./verdictreview.js');   // consistency loop: a rated ok/miss run earns a skill review
@@ -9827,6 +9827,7 @@ const ROUTES = [
   { m: 'POST', exact: '/api/skill-exchange/import', h: handleSkillExchangeImport },
   { m: 'POST', exact: '/api/skill-exchange/install', h: handleSkillExchangeInstall },
   { m: 'POST', exact: '/api/skill-exchange/check', h: handleSkillExchangeCheck },
+  { m: 'POST', exact: '/api/skill-exchange/check-registry', h: handleSkillExchangeCheckRegistry },
   { m: 'POST', exact: '/api/skill-exchange/export', h: handleSkillExchangeExport },
   { m: 'POST', exact: '/api/skill-exchange/publish-handoff', h: handleSkillExchangePublishHandoff },
   { m: 'POST', exact: '/api/skill-exchange/generations', h: handleSkillExchangeGenerations },
@@ -15650,8 +15651,35 @@ async function handleSkillExchangeCheck(req, res) {
   if (body === null) return json(400, { ok: false, error: 'bad json' });
   const agentId = String(body.agentId || 'agent');
   if (!isAgentId(agentId)) return json(403, { ok: false, error: 'forbidden' });
-  try { const preview = await skillExchange.check({ agentId, id: body.id }); skillMetrics.record('check', 'success', {}); return json(200, { ok: true, preview }); }
+  try { const preview = await skillExchange.check({ agentId, id: body.id, sourceUrl: body.sourceUrl, expectedDigest: body.expectedDigest, expectedVersion: body.expectedVersion }); skillMetrics.record('check', 'success', {}); return json(200, { ok: true, preview }); }
   catch (e) { skillMetrics.record('check', 'failed', { error: e && e.message }); return json(400, { ok: false, error: (e && e.message) || 'could not check for updates' }); }
+}
+async function handleSkillExchangeCheckRegistry(req, res) {
+  const json = (code, obj) => respondJson(res, code, obj);
+  const body = await readJsonBody(req, readBody, 1 << 16, res);
+  if (body === null) return json(400, { ok: false, error: 'bad json' });
+  const agentId = String(body.agentId || 'agent');
+  if (!isAgentId(agentId)) return json(403, { ok: false, error: 'forbidden' });
+  try {
+    const registry = body.site
+      ? await skillRegistry.discover({ site: body.site, query: body.query })
+      : await skillRegistry.search({ url: body.url, query: body.query });
+    const installed = skillStore.list(agentId, { includeArchived: true });
+    const entries = compareInstalledRegistrySkills(registry.entries, installed);
+    const counts = { current: 0, update: 0, changed: 0, older: 0, unknown: 0, notInstalled: 0 };
+    for (const entry of entries) {
+      const key = entry.status === 'not-installed' ? 'notInstalled' : entry.status;
+      if (Object.prototype.hasOwnProperty.call(counts, key)) counts[key]++;
+    }
+    skillMetrics.record('check-registry', 'success', { entries: entries.length, updates: counts.update, changed: counts.changed });
+    return json(200, {
+      ok: true, registryUrl: registry.registryUrl, name: registry.name, availability: registry.availability,
+      cached: !!registry.cached, entries, counts
+    });
+  } catch (e) {
+    skillMetrics.record('check-registry', 'failed', { error: e && e.message });
+    return json(400, { ok: false, error: (e && e.message) || 'could not compare installed skills with that registry' });
+  }
 }
 async function handleSkillExchangeExport(req, res) {
   const json = (code, obj) => respondJson(res, code, obj);
