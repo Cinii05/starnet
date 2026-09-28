@@ -4161,6 +4161,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
     { id: 'starnet',       name: 'STARNET MANAGED',   endpoint: 'managed inference · credits', blurb: 'no API key — runs on your balance', live: true, credits: true },
     { id: 'openrouter',    name: 'OPENROUTER',        endpoint: 'openrouter.ai/api/v1',      blurb: 'one key · 300+ models',  live: true },
     { id: 'codex',         name: 'CHATGPT (CODEX)',   endpoint: 'OAuth · ChatGPT subscription', blurb: 'sign-in, no API key',  live: true },
+    { id: 'claude-code',    name: 'CLAUDE CODE',       endpoint: 'local Claude Code subscription', blurb: 'claude.ai subscription, no API key', live: true, localSubscription: true },
     { id: 'grok',          name: 'GROK (XAI)',        endpoint: 'OAuth · SuperGrok / X Premium+', blurb: 'sign-in, no API key', live: true },
     { id: 'kimi',          name: 'KIMI FOR CODING',   endpoint: 'OAuth · Moonshot subscription', blurb: 'sign-in, no API key', live: true },
     { id: 'openai',        name: 'OPENAI API',        endpoint: 'api.openai.com/v1',          blurb: 'OpenAI-compatible', live: true },
@@ -4301,6 +4302,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
   const OAUTH_EXTRA = ['grok', 'kimi'];                 // codex is handled by the literal path above
   const OAUTH_ALL = ['codex'].concat(OAUTH_EXTRA);      // every keyless device-code provider
   function isOAuthProvider(id) { return OAUTH_ALL.indexOf(id) >= 0; }
+  function isLocalSubscriptionProvider(id) { return id === 'claude-code'; }
   const oauthLabels = { grok: 'Grok OAuth', kimi: 'Kimi OAuth' };
   function oauthMaskLabel(pid) { return oauthLabels[pid] || (provName(pid) + ' OAuth'); }
   const oauthStatus = { grok: null, kimi: null };       // last /api/auth/<pid>/status truth per provider
@@ -4380,7 +4382,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
     for (const p of PROVIDERS) {
       const credentialSaved = !!(h.hasStoredCredential && h.hasStoredCredential(p.id));
       const endpointConfigured = p.id === 'ollama' || (p.id === 'custom' && !!(h.getBaseUrl && h.getBaseUrl(p.id)));
-      if ((credentialSaved || endpointConfigured || p.id === activeProv()) && providerHealth[p.id] === undefined) refreshProviderHealth(p.id);
+      if ((credentialSaved || endpointConfigured || p.id === activeProv() || isLocalSubscriptionProvider(p.id)) && providerHealth[p.id] === undefined) refreshProviderHealth(p.id);
     }
   }
   function connectedKeys() {
@@ -4423,7 +4425,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
   function keysFor(id) { return connectedKeys().filter(x => x.provider === id); }
   function providerAcceptsKey(provider) {
     provider = provider || activeProv();
-    return !isOAuthProvider(provider) && provider !== 'ollama';
+    return !isOAuthProvider(provider) && !isLocalSubscriptionProvider(provider) && provider !== 'ollama';
   }
   function addKeyHtml(provider, empty) {
     provider = provider || 'openrouter';
@@ -4438,7 +4440,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
   }
 
   function providerLogoHtml(id) {
-    const asset = id === 'starnet' ? 'starnet-wordmark.svg' : 'providers/' + (id === 'codex' ? 'openai' : id) + '.svg';
+    const asset = id === 'starnet' ? 'starnet-wordmark.svg' : 'providers/' + (id === 'codex' ? 'openai' : id === 'claude-code' ? 'anthropic' : id) + '.svg';
     return '<span class="prov-logo' + (id === 'starnet' ? ' prov-logo-starnet' : '') + '" aria-hidden="true" style="--provider-icon:url(&quot;' + esc(new URL('assets/brand/' + asset, document.baseURI).href) + '&quot;)"></span>';
   }
 
@@ -4456,6 +4458,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
       // `codexDead ? 'avail expired'` / `&& !codexDead`; it now flags a dead sign-in for ANY OAuth provider.
       const codexDead = isOAuthProvider(p.id) && oauthExpiredFor(p.id);
       const h = H();
+      const localSubscription = isLocalSubscriptionProvider(p.id);
       const credentialSaved = isOAuthProvider(p.id) ? (ks.length > 0 && !codexDead) : !!(h && h.hasStoredCredential && h.hasStoredCredential(p.id));
       const endpointConfigured = p.id === 'ollama' || (p.id === 'custom' && !!(h && h.getBaseUrl && h.getBaseUrl(p.id)));
       const configured = credentialSaved || endpointConfigured;
@@ -4468,14 +4471,17 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
       // rate-limited, or wrong, and we haven't round-tripped it. Label it "KEY SAVED" (or SIGNED IN for
       // the codex OAuth path, which IS real auth) rather than the over-claiming "CONNECTED". The
       // ACTIVE/runnable badge logic below is unchanged — that already gates on selected provider + model.
-      const connLabel = isOAuthProvider(p.id) ? '● SIGNED IN' : '● KEY SAVED';
+      const connLabel = isOAuthProvider(p.id) ? '● SIGNED IN' : localSubscription ? '● SUBSCRIPTION READY' : '● KEY SAVED';
       const keyless = p.id === 'ollama' || (p.id === 'custom' && endpointConfigured && !credentialSaved);
       const localStat = !endpointConfigured ? '○ NO ENDPOINT' : health === undefined ? '◐ LOCAL ENDPOINT CONFIGURED · CHECKING…'
         : health && health.reachable ? '● LOCAL ENDPOINT CONFIGURED · REACHABLE' : '○ LOCAL ENDPOINT CONFIGURED · OFFLINE';
+      const subscriptionStat = health === undefined ? '◐ CLAUDE CODE · CHECKING…'
+        : health && health.credentialVerified ? '● CLAUDE ' + String(health.subscriptionType || 'SUBSCRIPTION').toUpperCase() + ' · VERIFIED'
+        : '○ CLAUDE CODE NOT READY';
       const keyStat = health === undefined ? connLabel + ' · CHECKING…'
         : health && health.credentialVerified ? connLabel + ' · VERIFIED' : health && health.reachable ? connLabel + ' · NOT VERIFIED' : connLabel + ' · CHECK FAILED';
       const stat = !p.live ? '○ COMING SOON' : codexDead ? '⚠ SIGN-IN EXPIRED — RECONNECT'
-        : keyless ? localStat : credentialSaved ? keyStat : (isOAuthProvider(p.id) ? '○ NOT SIGNED IN' : (p.id === 'custom' ? '○ NO ENDPOINT' : '○ NO KEY'));
+        : localSubscription ? subscriptionStat : keyless ? localStat : credentialSaved ? keyStat : (isOAuthProvider(p.id) ? '○ NOT SIGNED IN' : (p.id === 'custom' ? '○ NO ENDPOINT' : '○ NO KEY'));
       const n = ks.length;
       // NO-KEY cards that accept a key get an inline, collapsible paste-and-save row so the user never has to hunt
       // for where keys live. It reuses the SAME save path (Harness.setKey) as the key list below — no duplicate logic.
@@ -4494,7 +4500,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
             '<span class="prov-ep">' + esc(p.endpoint) + ' · ' + esc(p.blurb) + '</span>' +
           '</span>' +
         '</button>' +
-          '<span class="prov-stat"><span class="prov-stat-t">' + stat + (credentialSaved && !isOAuthProvider(p.id) ? '<i>' + n + (n === 1 ? ' key' : ' keys') + '</i>' : '') + '</span></span>' +
+          '<span class="prov-stat"><span class="prov-stat-t">' + stat + (credentialSaved && !isOAuthProvider(p.id) && !localSubscription ? '<i>' + n + (n === 1 ? ' key' : ' keys') + '</i>' : '') + '</span></span>' +
         (wantsInline ? '<button class="bb sm prov-addkey" data-act="prov-add-toggle" data-provider="' + esc(p.id) + '" aria-label="Add a ' + esc(p.name) + ' key" title="paste a ' + esc(p.name) + ' key without leaving this card">＋ ADD KEY</button>' : '') +
         (wantsOAuthSignin ? '<button class="bb sm prov-addkey" data-act="prov-oauth-signin" data-provider="' + esc(p.id) + '" aria-label="Sign in to ' + esc(p.name) + '" title="device-code sign-in — no API key needed">⏼ SIGN IN</button>' : '') +
         (wantsInline
