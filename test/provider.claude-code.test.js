@@ -52,6 +52,8 @@ module.exports = (async () => {
   A.ok(toolsAt >= 0 && C.BASE_ARGS[toolsAt + 1] === '', 'Claude-side tools are explicitly empty');
   const modelAt = C.BASE_ARGS.indexOf('--model');
   A.eq(C.BASE_ARGS[modelAt + 1], 'sonnet', 'CLI model uses stable sonnet alias');
+  const suggestionsAt = C.BASE_ARGS.indexOf('--prompt-suggestions');
+  A.ok(suggestionsAt >= 0 && C.BASE_ARGS[suggestionsAt + 1] === 'false', 'auxiliary prompt-suggestion inference is disabled');
 
   const env = C.sanitizedEnv({
     PATH: 'keep-me',
@@ -265,6 +267,14 @@ module.exports = (async () => {
     A.eq(models.length, 1, 'v0.1 exposes exactly one Claude model');
     A.eq(models[0].id, 'sonnet', 'v0.1 model catalog is Sonnet-only');
     A.eq(JSON.stringify(models[0].reasoningEfforts), JSON.stringify(['none']), 'v0.1 exposes no fake reasoning-effort dial');
+  }
+
+  {
+    const raw = 'provider failed with sk-ant-AbCdEfGhIjKlMnOp and more detail\nsecond line';
+    const safe = C._internals.safeErrorText(raw);
+    A.eq(safe.includes('sk-ant-AbCdEfGhIjKlMnOp'), false, 'raw Anthropic-shaped secrets are redacted from CLI errors');
+    A.ok(safe.includes('[redacted-key]'), 'redacted CLI error preserves a non-secret diagnostic marker');
+    A.eq(safe.includes('\n'), false, 'CLI stderr is flattened before surfacing');
   }
 
   {
