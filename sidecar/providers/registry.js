@@ -73,6 +73,30 @@
       order: 10
     },
     {
+      // CLAUDE CODE SUBSCRIPTION — local first-party Claude Code CLI. This is deliberately separate from
+      // the API-key Anthropic profile: StarNet never reads/copies Claude OAuth material and never introduces
+      // ANTHROPIC_API_KEY. v0.1 is reasoning-only and exposes only the CLI's stable "sonnet" alias.
+      id: 'claude-code',
+      aliases: [],
+      name: 'Claude Code',
+      label: 'CLAUDE CODE',
+      endpoint: 'local Claude Code subscription',
+      blurb: 'claude.ai subscription, no API key',
+      live: true,
+      adapter: 'claude-code',
+      apiMode: 'local_cli',
+      authType: 'local_subscription',
+      keyRequired: false,
+      modelsRequireAuth: true,
+      baseUrl: '',
+      defaultReasoningEffort: 'medium',
+      unmetered: true,
+      credentialPool: false,
+      supportsTools: false,
+      supportsReasoning: true,
+      order: 13
+    },
+    {
       // GROK OAUTH — Grok on a SuperGrok / X Premium+ subscription via the RFC 8628 device-code flow (no API
       // key). Inference is OpenAI-compatible at api.x.ai/v1 with the OAuth access token riding in AS the Bearer
       // key. Separate id from the API-key 'xai' profile above (same wire, different auth), like codex vs openai.
@@ -605,6 +629,10 @@
     const profile = getProviderProfile(value);
     return !!(profile && profile.authType === 'oauth_device_code' && profile.id !== 'codex');
   }
+  function providerUsesLocalSubscription(value) {
+    const profile = getProviderProfile(value);
+    return !!(profile && profile.authType === 'local_subscription');
+  }
   function defaultReasoningEffortForProvider(value) {
     const profile = getProviderProfile(value) || BY_ID.get(DEFAULT_PROVIDER_ID);
     return (profile && profile.defaultReasoningEffort) || 'medium';
@@ -660,6 +688,7 @@
     normalizeProviderId,
     providerUsesCodex,
     providerUsesDeviceOAuth,
+    providerUsesLocalSubscription,
     defaultReasoningEffortForProvider,
     providerRequiresKey,
     providerRequiresBaseUrl,
