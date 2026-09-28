@@ -63,10 +63,52 @@ function store(io) { return makeSkillStore({ io, clock: { now: () => 9000 }, gua
   });
   const checked = await exchange.check({ agentId: 'a', id: installed.skill.id });
   A.eq(checked.updateAvailable, true, 'changed source reports an available update');
+  A.eq(checked.installedVersion, '1.0.0', 'update preview reports the installed release version');
+  skills.manage({ agentId: 'a', action: 'pin', target: installed.skill.id });
+  A.throws(() => exchange.install({ agentId: 'a', inspectionId: checked.inspectionId, sourceDigest: checked.sourceDigest }), /pinned/,
+    'pinned skills cannot be updated by bypassing the UI');
+  skills.manage({ agentId: 'a', action: 'unpin', target: installed.skill.id });
   const updated = exchange.install({ agentId: 'a', inspectionId: checked.inspectionId, sourceDigest: checked.sourceDigest });
   A.eq(updated.action, 'update', 'a reviewed source update edits in place');
   A.eq(skills.list('a').length, 1, 'updates do not duplicate a skill');
   A.ok(/UNREVIEWED NEW BYTES/.test(skills.view('a', installed.skill.id, { bump: false }).body), 'the newly reviewed update is persisted');
+
+  let digestMismatch = ''; try {
+    await exchange.check({ agentId: 'a', id: installed.skill.id, expectedDigest: 'deadbeef' });
+  } catch (e) { digestMismatch = e.message; }
+  A.ok(/does not match the registry entry/.test(digestMismatch), 'registry digest mismatch refuses the reviewed update');
+
+  const localOnly = skills.manage({
+    agentId: 'a', action: 'create', name: 'Registry Only', summary: 'Locally created before it had an upstream source',
+    body: 'Old local instructions.', category: 'Imported', createdBy: 'user'
+  });
+  A.ok(localOnly.ok, 'fixture creates a local skill without an upstream source');
+  const registryText = '---\nname: "Registry Only"\ndescription: "Registry supplied update"\n---\n\nReviewed registry instructions.\n';
+  const registryExchange = makeSkillExchange({
+    fetchDocument: async url => ({ url, text: registryText }), skillStore: skills, guard, hash,
+    now: () => 2500, makeId: () => 'registry-update'
+  });
+  const registryProbe = await registryExchange.inspect({ url: 'https://skills.example/registry-only/SKILL.md' });
+  const registryChecked = await registryExchange.check({
+    agentId: 'a', id: localOnly.skill.id, sourceUrl: 'https://skills.example/registry-only/SKILL.md',
+    expectedDigest: registryProbe.packageDigest, expectedVersion: '1.1.0'
+  });
+  A.eq(registryChecked.version, '1.1.0', 'registry release version fills missing SKILL.md version metadata after digest verification');
+  const registryUpdated = registryExchange.install({
+    agentId: 'a', inspectionId: registryChecked.inspectionId, sourceDigest: registryChecked.sourceDigest
+  });
+  A.eq(registryUpdated.action, 'update', 'registry-bound source updates an existing local skill in place');
+  A.eq(skills.view('a', localOnly.skill.id, { bump: false }).sourceVersion, '1.1.0', 'registry release version persists on the installed skill');
+  A.eq(skills.view('a', localOnly.skill.id, { bump: false }).sourceUrl, 'https://skills.example/registry-only/SKILL.md', 'registry source becomes the installed update source');
+
+  const racePreview = await registryExchange.check({
+    agentId: 'a', id: localOnly.skill.id, sourceUrl: 'https://skills.example/registry-only/SKILL.md'
+  });
+  skills.manage({ agentId: 'a', action: 'edit', target: localOnly.skill.id, summary: 'Changed after review' });
+  A.throws(() => registryExchange.install({
+    agentId: 'a', inspectionId: racePreview.inspectionId, sourceDigest: racePreview.sourceDigest
+  }), /changed after the update check/, 'an installed skill changing after review invalidates the staged update');
+
 
   // Community URLs are caution/ask (installed but withheld for exact-content approval); dangerous
   // instruction overrides are blocked before install.
