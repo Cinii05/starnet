@@ -184,7 +184,9 @@ function makeSkillExchange(deps) {
       if (updateTarget.pinned) throw new Error('this skill is pinned; unpin it before applying an upstream update');
       if (str(updateTarget.name).toLowerCase() !== d.name.toLowerCase()) throw new Error('the reviewed update no longer matches the installed skill name');
       const currentDigest = str(updateTarget.packageDigest || updateTarget.sourceDigest).toLowerCase();
-      if (currentDigest !== stage.updateTarget.installedDigest) throw new Error('the installed skill changed after the update check; check again');
+      if (updateTarget.packageDiverged || currentDigest !== stage.updateTarget.installedDigest) {
+        throw new Error('the installed skill changed after the update check; check again');
+      }
       if (bySource && bySource.id !== updateTarget.id) throw new Error('that update source is already attached to another skill');
     } else if (byName && (!bySource || byName.id !== bySource.id)) {
       throw new Error('a different skill named "' + d.name + '" already exists');
