@@ -109,6 +109,7 @@ test/purge-leaked-codex-tokens.test.js
 test/provider.oauth-device.test.js
 test/codex-auth-state.test.js
 test/provider.codex.test.js
+test/provider.claude-code.test.js
 test/provider.codex.pairing.test.js
 test/credpool.test.js
 test/credrotate.test.js
