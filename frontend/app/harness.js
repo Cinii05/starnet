@@ -231,7 +231,6 @@ const Harness = (() => {
     // they are configured identically in a browser build and a packaged one. Probing after the return would
     // leave configured('starnet') false forever anywhere that isn't Tauri — including every dev session.
     await refreshCreditsConfigured();
-    await refreshClaudeCodeConfigured();
     if (!DESKTOP) return;
     let loaded = false;
     try {
@@ -287,21 +286,11 @@ const Harness = (() => {
     } catch (_) { _configuredByProvider.starnet = false; }
     return !!_configuredByProvider.starnet;
   }
-  async function refreshClaudeCodeConfigured() {
-    selectionRevision++;
-    try {
-      const r = await fetch('/api/auth/claude-code/status', { cache: 'no-store' });
-      const j = (r && r.ok) ? await r.json() : null;
-      _configuredByProvider['claude-code'] = !!(j && j.ready);
-    } catch (_) { _configuredByProvider['claude-code'] = false; }
-    return !!_configuredByProvider['claude-code'];
-  }
   /* whether a key is set — works in both modes; never exposes the value. In dev mode the host holds the
      key (runtimeKey), so we report configured without one — that's what lets a fresh origin auto-resume. */
   function normalizeProviderId(provider) {
     const p = String(provider || getProv() || 'openrouter').trim().toLowerCase();
     if (p === 'codex' || p === 'openai-codex') return 'codex';
-    if (p === 'claude-code') return 'claude-code';
     if (p === 'openai' || p === 'openai-api') return 'openai';
     if (p === 'anthropic' || p === 'claude') return 'anthropic';
     if (p === 'gemini' || p === 'google' || p === 'google-ai' || p === 'google-gemini') return 'gemini';
@@ -349,7 +338,7 @@ const Harness = (() => {
     const p = normalizeProviderId(provider);
     // codex/grok/kimi authenticate by device-code OAuth tokens held sidecar-side; ollama/custom are keyless
     // endpoints; starnet's bearer is the linked device token, which the user never sees, let alone pastes.
-    return p !== 'codex' && p !== 'grok' && p !== 'kimi' && p !== 'claude-code' && p !== 'ollama' && p !== 'custom' && p !== 'starnet';
+    return p !== 'codex' && p !== 'grok' && p !== 'kimi' && p !== 'ollama' && p !== 'custom' && p !== 'starnet';
   }
   function configured(provider) {
     const p = normalizeProviderId(provider);
@@ -359,7 +348,6 @@ const Harness = (() => {
     // through to the keyless branch below, which would answer "configured" for every station simply because
     // there is no key to look for, and claim a station can run on credits it has never been linked to.
     if (p === 'starnet') return !!_configuredByProvider.starnet;
-    if (p === 'claude-code') return !!_configuredByProvider['claude-code'];
     return DESKTOP ? !!(_configuredByProvider[p] || (p === 'openrouter' && _configured)) : (DEVMODE || !providerNeedsKey(p) || !!getKey(p));
   }
 
@@ -375,7 +363,6 @@ const Harness = (() => {
   function hasStoredCredential(provider) {
     const p = normalizeProviderId(provider);
     if (p === 'codex') return DESKTOP ? !!_configuredByProvider.codex : (getProv() === 'codex');
-    if (p === 'claude-code') return !!_configuredByProvider['claude-code'];
     // grok/kimi mirror codex: OAuth tokens live sidecar-side, so the desktop configured map (fed by the boot
     // probe + app.js's status refresh) is the only local truth; in the browser the active-provider pick stands in.
     if (p === 'grok' || p === 'kimi') return DESKTOP ? !!_configuredByProvider[p] : (getProv() === p);
@@ -667,13 +654,10 @@ const Harness = (() => {
         body: JSON.stringify({ provider: p, key: getKey(p) || '', baseUrl })
       });
       const j = await r.json().catch(() => ({}));
-      if (p === 'claude-code') setDesktopConfigured(p, !!(r.ok && j.credentialVerified));
       return {
-        provider: p, credentialSaved: p === 'claude-code' ? !!(r.ok && j.credentialVerified) : credentialSaved, endpointConfigured,
+        provider: p, credentialSaved, endpointConfigured,
         reachable: !!(r.ok && j.reachable), catalogAvailable: !!(j && j.catalogAvailable),
         credentialVerified: !!(j && j.credentialVerified), selected,
-        health: String((j && j.health) || ''), version: String((j && j.version) || ''),
-        subscriptionType: String((j && j.subscriptionType) || ''),
         error: String((j && j.error) || '')
       };
     } catch (_) { return fallback; }
@@ -767,7 +751,7 @@ const Harness = (() => {
       // available when the STATION has the required shared gear (a specialist owns only a desk yet still gets its
       // class skills). Sent separately so the tool projection is untouched; the sidecar uses it for skills only.
       if (Array.isArray(stationPlaced) && stationPlaced.length) reqBody.stationPlaced = stationPlaced;
-      if (!DESKTOP && !DEVMODE && provider !== 'codex' && provider !== 'claude-code' && provider !== 'grok' && provider !== 'kimi') reqBody.key = key;   // dev/desktop + the OAuth providers keep secrets server-side (custom/ollama may still ride an optional key)
+      if (!DESKTOP && !DEVMODE && provider !== 'codex' && provider !== 'grok' && provider !== 'kimi') reqBody.key = key;   // dev/desktop + the OAuth providers keep secrets server-side (custom/ollama may still ride an optional key)
       if (!DESKTOP && !DEVMODE) {
         try { const pool = JSON.parse(readScoped(LS.keyPool, provider) || '[]'); if (Array.isArray(pool) && pool.length) reqBody.keyPool = pool; } catch (_) {}
       }
@@ -1312,7 +1296,7 @@ const Harness = (() => {
   return {
     pingEngine,
     isDesktop: () => DESKTOP,   // lets the UI tell a desktop keychain-store failure (token saved locally) from a browser no-op
-    getSelectionRevision, getKey, setKey, setKeyPool, validateAndSetKeyPool, keyPoolSize, storeChannelToken, getModel, setModel, getProv, setProv, getBaseUrl, setBaseUrl, getReasoningEffort, setReasoningEffort, clearLegacyReasoningOff, normalizeReasoningEffort, init, configured, refreshCreditsConfigured, refreshClaudeCodeConfigured, hasStoredCredential, setDesktopConfigured,
+    getSelectionRevision, getKey, setKey, setKeyPool, validateAndSetKeyPool, keyPoolSize, storeChannelToken, getModel, setModel, getProv, setProv, getBaseUrl, setBaseUrl, getReasoningEffort, setReasoningEffort, clearLegacyReasoningOff, normalizeReasoningEffort, init, configured, refreshCreditsConfigured, hasStoredCredential, setDesktopConfigured,
     listModels, probeProvider, validateAndSetKey, priceOf, contextLimitOf, contextState, chat, cancel, haltAll, consent, consentAck, consentAnswer, summonAck, notebook,
     runRecoveries, prepareAutomaticRecovery, resolveRunRecovery, prepareReviewedRecovery,
     memoryProposals, memoryTurnin, memoryVeto, memoryReset, memoryRecords, memoryDeclined, memoryRestore, memoryPending, memoryPin, memoryEdit, memoryForget,
