@@ -337,6 +337,12 @@
     // 3. structured error-code (errors that arrive with no HTTP status)
     if (code) {
       const c = String(code).toLowerCase();
+      if (c === 'claude_code_subscription_limit') return 'quota_exhausted';
+      if (c === 'claude_code_rate_limited') return 'rate_limit';
+      if (c === 'claude_code_not_authenticated' || c === 'claude_code_auth_failed') return 'auth';
+      if (c === 'claude_code_timeout') return 'timeout';
+      if (c === 'claude_code_protocol_error' || c === 'claude_code_tool_protocol_violation') return 'format_error';
+      if (c === 'claude_code_not_available' || c === 'claude_code_process_failed') return 'local_error';
       if (/context_length|context_window|max.*token/.test(c)) return 'context_overflow';
       if (/usage_limit_reached|quota_exhausted|plan_limit/.test(c)) return 'quota_exhausted';
       if (/insufficient_quota|insufficient_credit|billing|payment/.test(c)) return 'billing';
