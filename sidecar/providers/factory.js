@@ -8,6 +8,7 @@
     module.exports = factory(
       require('./openrouter.js'),
       require('./codex.js'),
+      require('./claude-code.js'),
       require('./openai-compatible.js'),
       require('./anthropic.js'),
       require('./gemini.js'),
@@ -16,9 +17,9 @@
   } else {
     root.SK = root.SK || {};
     root.SK.providers = root.SK.providers || {};
-    root.SK.providers.factory = factory(root.SK.providers.openrouter, root.SK.providers.codex, root.SK.providers.openaiCompatible, root.SK.providers.anthropic, root.SK.providers.gemini, root.SK.providers.registry);
+    root.SK.providers.factory = factory(root.SK.providers.openrouter, root.SK.providers.codex, root.SK.providers.claudeCode, root.SK.providers.openaiCompatible, root.SK.providers.anthropic, root.SK.providers.gemini, root.SK.providers.registry);
   }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (openrouter, codex, openaiCompatible, anthropic, gemini, registry) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (openrouter, codex, claudeCode, openaiCompatible, anthropic, gemini, registry) {
   'use strict';
 
   const PROVIDER_IDS = registry.providerIds();
@@ -106,6 +107,14 @@
         renewToken: opts.renewToken,   // optional 401-recovery seam — the host's force-refresh (see codex.js header)
         baseUrl: opts.baseUrl || profile.baseUrl,
         reasoningEffort: opts.reasoningEffort
+      });
+    }
+    if (profile.adapter === 'claude-code') {
+      return claudeCode.makeClaudeCodeProvider({
+        spawn: opts.spawn,
+        executable: opts.executable,
+        cwd: opts.cwd,
+        env: opts.env
       });
     }
     if (profile.adapter === 'openrouter') {
@@ -200,6 +209,7 @@
     normalizeProviderId: registry.normalizeProviderId,
     providerUsesCodex: registry.providerUsesCodex,
     providerUsesDeviceOAuth: registry.providerUsesDeviceOAuth,
+    providerUsesLocalSubscription: registry.providerUsesLocalSubscription,
     defaultReasoningEffortForProvider: registry.defaultReasoningEffortForProvider,
     providerRequiresKey: registry.providerRequiresKey,
     providerRequiresBaseUrl: registry.providerRequiresBaseUrl,
