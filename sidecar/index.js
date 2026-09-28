@@ -117,6 +117,7 @@ const {
   normalizeProviderId: normalizeProviderIdFromRegistry,
   providerUsesCodex: registryProviderUsesCodex,
   providerUsesDeviceOAuth: registryProviderUsesDeviceOAuth,
+  providerUsesLocalSubscription: registryProviderUsesLocalSubscription,
   defaultReasoningEffortForProvider: registryDefaultReasoningEffort,
   providerRequiresKey,
   providerRequiresBaseUrl,
@@ -2224,7 +2225,7 @@ function envFirst(names) {
 }
 function providerRuntimeKey(provider, explicitKey) {
   const id = normalizeProvider(provider);
-  if (registryProviderUsesCodex(id)) return '';
+  if (registryProviderUsesCodex(id) || registryProviderUsesLocalSubscription(id)) return '';
 
   // 'starnet' managed provider: the bearer is the linked device token, resolved from the credits config
   // (env CREDITS_* override or the linked .secrets/credits.json record) — never an env API key.
@@ -2264,10 +2265,33 @@ function providerRuntimeBaseUrl(provider, explicitBaseUrl) {
   const profile = getProviderProfile(id);
   return envFirst(profile && profile.baseUrlEnv) || (profile && profile.baseUrl) || '';
 }
+const localSubscriptionHealth = new Map();   // provider id -> bounded non-secret health snapshot
+function rememberLocalSubscriptionHealth(provider, health) {
+  const id = normalizeProvider(provider);
+  const h = health && typeof health === 'object' ? health : {};
+  const safe = { state: String(h.state || 'HEALTH_CHECK_FAILED'), ready: h.ready === true,
+    version: String(h.version || ''), subscriptionType: String(h.subscriptionType || ''), checkedAt: Date.now() };
+  localSubscriptionHealth.set(id, safe);
+  return safe;
+}
+async function refreshLocalSubscriptionHealth(provider, force) {
+  const id = normalizeProvider(provider);
+  if (!registryProviderUsesLocalSubscription(id)) return null;
+  const prior = localSubscriptionHealth.get(id);
+  if (!force && prior && Date.now() - Number(prior.checkedAt || 0) < 15000) return prior;
+  try {
+    const p = selectProvider({ provider: id });
+    if (!p || typeof p.healthCheck !== 'function') return rememberLocalSubscriptionHealth(id, { state: 'HEALTH_CHECK_FAILED', ready: false });
+    return rememberLocalSubscriptionHealth(id, await p.healthCheck(!!force));
+  } catch (_) {
+    return rememberLocalSubscriptionHealth(id, { state: 'HEALTH_CHECK_FAILED', ready: false });
+  }
+}
 function providerHasCredential(provider, key, baseUrl) {
   const id = normalizeProvider(provider);
   if (registryProviderUsesCodex(id)) return !!(codexTokens && codexTokens.access_token);
   if (registryProviderUsesDeviceOAuth(id)) { const e = oauthProviders[id]; return !!(e && e.tokens && e.tokens.access_token); }
+  if (registryProviderUsesLocalSubscription(id)) return !!(localSubscriptionHealth.get(id) && localSubscriptionHealth.get(id).ready);
   if (providerRequiresBaseUrl(id) && !String(baseUrl || '').trim()) return false;
   if (providerRequiresKey(id) && !String(key || '').trim()) return false;
   return true;
@@ -2332,6 +2356,7 @@ function providerCredentialError(provider) {
   const label = (profile && profile.label) || id;
   if (registryProviderUsesCodex(id)) return 'connect ChatGPT first - a signed-in ChatGPT account + model are required';
   if (registryProviderUsesDeviceOAuth(id)) return 'sign in to ' + label + ' first - a signed-in subscription + model are required';
+  if (registryProviderUsesLocalSubscription(id)) return 'sign in to the local Claude Code app first - a supported claude.ai subscription is required';
   // starnet's baseUrl+bearer both come from the device link, so "configure the base URL" / "connect a key"
   // are remedies that do not exist for it — the one real remedy is (re)linking the station.
   if (id === 'starnet') return 'link this station to a StarNet account (SETTINGS -> PROVIDERS -> STARNET MANAGED) to run on credits';
@@ -8510,6 +8535,7 @@ function normalizeProvider(provider) {
 }
 function providerUsesCodex(provider) { return registryProviderUsesCodex(normalizeProvider(provider)); }
 function providerUsesDeviceOAuth(provider) { return registryProviderUsesDeviceOAuth(normalizeProvider(provider)); }
+function providerUsesLocalSubscription(provider) { return registryProviderUsesLocalSubscription(normalizeProvider(provider)); }
 function normalizeReasoningEffort(value) {
   const key = String(value || 'medium').trim().toLowerCase().replace(/[\s_-]+/g, '');
   const map = {
@@ -9778,6 +9804,7 @@ const ROUTES = [
   { m: 'POST', exact: '/api/auth/codex/poll', h: handleCodexPoll },
   { m: 'GET', exact: '/api/auth/codex/status', h: handleCodexStatus },
   { m: 'GET', exact: '/api/auth/codex/models', h: handleCodexModels },
+  { m: 'GET', exact: '/api/auth/claude-code/status', h: handleClaudeCodeStatus },
   // Grok / Kimi subscription device-OAuth — the SAME five-verb shape as codex, keyed by provider id. Tokens
   // live only in WORKSPACES/<id>/tokens.json and never ride any response payload (status is booleans/strings).
   { m: 'POST', exact: '/api/auth/grok/start', h: (req, res) => handleOAuthStart(req, res, 'grok') },
@@ -15870,6 +15897,7 @@ async function handleRun(req, res) {
   // and the compose site falls back to the room's placedTypes exactly as before.
   const stationObjects = (body && Array.isArray(body.stationPlaced)) ? placedTypesFrom(body.stationPlaced) : null;
   const usingCodex = providerUsesCodex(runProvider);   // Codex authenticates by OAuth token, not an API key
+  const usingLocalSubscription = providerUsesLocalSubscription(runProvider);
   // Desktop build: the key lives in runtimeKey (from the keychain, seeded via env at spawn and updatable
   // via /api/key). The browser build still sends body.key, which wins.
   const baseUrl = providerRuntimeBaseUrl(runProvider, body && (body.baseUrl || body.base_url));
@@ -15878,6 +15906,7 @@ async function handleRun(req, res) {
   // signed out of GROK OAUTH as "add a provider key (or sign in with ChatGPT)": wrong provider, wrong door
   // (2026-09-27). The "missing key/model" prefix stays; older pages and tests classify on it.
   if (!model) { res.writeHead(400); return res.end('no model selected — pick a model for ' + oauthLabel(runProvider) + ' first'); }
+  if (usingLocalSubscription) await refreshLocalSubscriptionHealth(runProvider, true);
   if (!providerHasCredential(runProvider, key, baseUrl)) { res.writeHead(400); return res.end('missing key/model — ' + providerCredentialError(runProvider)); }
 
   // Consume a continuation before opening the response stream or doing provider/tool work. The durable start
@@ -16277,12 +16306,13 @@ async function runOnceCore(o) {
   const providerId = normalizeProvider(o.provider || (rosterIdent && rosterIdent.provider) || '');
   const usingCodex = providerUsesCodex(providerId);
   const usingDeviceOAuth = providerUsesDeviceOAuth(providerId);
+  const usingLocalSubscription = providerUsesLocalSubscription(providerId);
   let providerUnmetered = !!((getProviderProfile(providerId) || {}).unmetered);
   let runUnmetered = providerUnmetered;
   // Class Loadouts S1: reasoning-effort precedence = explicit run-option > this agent's roster record (the class
   // applied default) > provider default. An explicit per-run choice still wins; the roster only fills a gap.
   const reasoningEffort = resolveReasoningEffort(providerId, o.reasoningEffort || o.reasoning_effort || (o.reasoning && o.reasoning.effort) || (rosterIdent && rosterIdent.reasoningEffort));
-  let model = String((o && o.model) || '').trim() || (rosterIdent && rosterIdent.model ? String(rosterIdent.model).trim() : '') || (usingCodex ? CODEX_DEFAULT_MODEL : CRON_DEFAULT_MODEL);
+  let model = String((o && o.model) || '').trim() || (rosterIdent && rosterIdent.model ? String(rosterIdent.model).trim() : '') || (usingCodex ? CODEX_DEFAULT_MODEL : usingLocalSubscription ? 'sonnet' : CRON_DEFAULT_MODEL);
   const baseUrl = providerRuntimeBaseUrl(providerId, o.baseUrl || o.base_url || '');
   const runKey = providerRuntimeKey(providerId, key);
   const streamId = o.streamId || null;   // M-mem.2b (browser run only; the headless hub omits it → global memory)
@@ -17495,6 +17525,8 @@ async function runOnceCore(o) {
       return;
     }
     provider = selectProvider({ provider: providerId, fetch: globalThis.fetch, token: oauthToken, headers: oauthInferenceHeaders(providerId), baseUrl, reasoningEffort });
+  } else if (usingLocalSubscription) {
+    provider = selectProvider({ provider: providerId });
   } else {
     provider = selectProvider({ provider: providerId, fetch: globalThis.fetch, key: runKey, baseUrl, reasoningEffort });
   }
@@ -17510,9 +17542,9 @@ async function runOnceCore(o) {
   // SETTINGS→Models persisted chain (effectiveFallbackChain: saved-or-env); env SKYNET_FALLBACK_MODELS remains the
   // default when nothing is saved. On overload/5xx/404/auth/billing/rate_limit the loop retries the turn on the
   // next model instead of dying (errorClass shouldFallback/shouldRotateCredential). Empty = off.
-  const fallbackModels = (Array.isArray(o.fallbackModels) ? o.fallbackModels : effectiveFallbackChain())
+  const fallbackModels = (usingLocalSubscription ? [] : (Array.isArray(o.fallbackModels) ? o.fallbackModels : effectiveFallbackChain()))
     .map(s => String(s || '').trim()).filter(Boolean);
-  const savedProviderFallbacks = !Array.isArray(o.fallbackModels) && fallbackSaved != null && providerId !== 'openrouter' && providerId !== 'starnet'
+  const savedProviderFallbacks = !usingLocalSubscription && !Array.isArray(o.fallbackModels) && fallbackSaved != null && providerId !== 'openrouter' && providerId !== 'starnet'
     ? fallbackModels.splice(0).map(m => ({ provider: 'openrouter', model: m })) : [];
   for (let i = fallbackModels.length - 1; i >= 0; i--) if (fallbackModels[i] === model) fallbackModels.splice(i, 1);
   // COMPETENCE PREFLIGHT: an explicitly configured fallback chain is already the Commander's authority to use
@@ -17568,10 +17600,11 @@ async function runOnceCore(o) {
     }));
   }
   const providerFallbacks = [];
-  const rawProviderFallbacks = savedProviderFallbacks.concat(Array.isArray(o.fallbackProviders) ? o.fallbackProviders : []);
+  const rawProviderFallbacks = usingLocalSubscription ? [] : savedProviderFallbacks.concat(Array.isArray(o.fallbackProviders) ? o.fallbackProviders : []);
   for (const fb of rawProviderFallbacks) {
     if (!fb || typeof fb !== 'object') continue;
     const fbProviderId = normalizeProvider(fb.provider || providerId);
+    if (providerUsesLocalSubscription(fbProviderId)) continue;   // v0.1 is never an automatic fallback target
     const fbModel = String(fb.model || '').trim();
     if (!fbModel || (fbProviderId === providerId && fbModel === model)) continue;
     const fbBaseUrl = providerRuntimeBaseUrl(fbProviderId, fb.baseUrl || fb.base_url || '');
@@ -20981,6 +21014,14 @@ function handleCodexStatus(req, res) {
   res.end(JSON.stringify(codexAuthState.statusPayload({ tokens: codexTokens, dead: codexAuthDead, persistError: codexPersistError })));
 }
 
+// GET /api/auth/claude-code/status — no inference and no credential material.
+async function handleClaudeCodeStatus(req, res) {
+  const h = await refreshLocalSubscriptionHealth('claude-code', true);
+  res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify({ state: h ? h.state : 'HEALTH_CHECK_FAILED', ready: !!(h && h.ready),
+    version: h ? h.version : '', subscriptionType: h ? h.subscriptionType : '' }));
+}
+
 // GET /api/auth/codex/models — the ACCOUNT's real Codex model list (live-discovered with a fresh token), so
 // the connect screen offers exactly the slugs the backend will accept. Falls back to the provider's curated
 // list (and reports the error) when not connected / discovery fails, so the dropdown is never empty.
@@ -21006,7 +21047,9 @@ function publicModel(m) {
   };
 }
 
-function handleProviders(req, res) {
+async function handleProviders(req, res) {
+  const localProfiles = listProviderProfiles().filter(p => providerUsesLocalSubscription(p.id));
+  await Promise.all(localProfiles.map(p => refreshLocalSubscriptionHealth(p.id, false)));
   const providers = listProviderProfiles().map(p => {
     const key = providerRuntimeKey(p.id, '');
     const baseUrl = providerRuntimeBaseUrl(p.id, '');
@@ -21029,6 +21072,12 @@ async function handleProviderProbe(req, res) {
   const id = normalizeProvider(body.provider);
   const profile = getProviderProfile(id);
   if (!profile) return json({ provider: id, reachable: false, catalogAvailable: false, credentialVerified: false, error: 'unknown provider' });
+  if (providerUsesLocalSubscription(id)) {
+    const h = await refreshLocalSubscriptionHealth(id, true);
+    return json({ provider: id, reachable: !!(h && h.ready), catalogAvailable: !!(h && h.ready),
+      credentialVerified: !!(h && h.ready), health: h ? h.state : 'HEALTH_CHECK_FAILED',
+      version: h ? h.version : '', subscriptionType: h ? h.subscriptionType : '' });
+  }
   try {
     const models = await listModelsForProvider(id, { key: String(body.key || ''), baseUrl: String(body.baseUrl || body.base_url || '') });
     // A catalog endpoint that does not require authentication proves reachability, not that a saved key can run.
@@ -21054,7 +21103,7 @@ async function handleProviderValidate(req, res) {
   let body; try { body = JSON.parse(await readBody(req, 1 << 16)) || {}; } catch (_) { return json({ ok: false, credentialVerified: false, error: 'bad json' }); }
   const id = normalizeProvider(body.provider);
   const profile = getProviderProfile(id);
-  if (!profile || providerUsesCodex(id) || providerUsesDeviceOAuth(id)) return json({ ok: false, provider: id, credentialVerified: false, error: 'this provider does not accept an API key' });
+  if (!profile || providerUsesCodex(id) || providerUsesDeviceOAuth(id) || providerUsesLocalSubscription(id)) return json({ ok: false, provider: id, credentialVerified: false, error: 'this provider does not accept an API key' });
   const candidate = String(body.key || '').trim();
   const baseUrl = providerRuntimeBaseUrl(id, body.baseUrl || body.base_url || '');
   if (providerRequiresKey(id) && !candidate) return json({ ok: false, provider: id, credentialVerified: false, error: 'a candidate key is required' });
@@ -21111,6 +21160,14 @@ async function listModelsForProvider(providerId, opts) {
   } else if (providerUsesDeviceOAuth(id)) {
     const token = await ensureOAuthAccessToken(id);
     provider = selectProvider({ provider: id, fetch: globalThis.fetch, token, headers: oauthInferenceHeaders(id), baseUrl });
+  } else if (providerUsesLocalSubscription(id)) {
+    provider = selectProvider({ provider: id });
+    const h = rememberLocalSubscriptionHealth(id, await provider.healthCheck(false));
+    if (!h.ready) {
+      const err = new Error(providerCredentialError(id) + ' (' + h.state + ')');
+      err.code = 'provider_not_configured';
+      throw err;
+    }
   } else {
     provider = selectProvider({ provider: id, fetch: globalThis.fetch, key, baseUrl });
   }
