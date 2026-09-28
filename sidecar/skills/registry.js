@@ -41,7 +41,8 @@ function compareInstalled(entries, installed) {
     const installedDigest = str(current.packageDigest || current.sourceDigest).trim().toLowerCase();
     const installedVersion = str(current.sourceVersion).trim();
     let status = 'changed';
-    if (remoteDigest && installedDigest && remoteDigest === installedDigest) status = 'current';
+    if (current.packageDiverged) status = 'changed';
+    else if (remoteDigest && installedDigest && remoteDigest === installedDigest) status = 'current';
     else {
       const cmp = compareSemver(str(entry && entry.version), installedVersion);
       if (cmp > 0) status = 'update';
