@@ -1101,6 +1101,7 @@ const Harness = (() => {
   function skillExchangeImport(envelope) { return skillExchangePost('import', { envelope }); }
   function skillExchangeInstall(o) { return skillExchangePost('install', o); }
   function skillExchangeCheck(o) { return skillExchangePost('check', o); }
+  function skillExchangeCheckRegistry(o) { return skillExchangePost('check-registry', o); }
   function skillExchangeExport(o) { return skillExchangePost('export', o); }
   function skillExchangePublishHandoff(o) { return skillExchangePost('publish-handoff', o); }
   function skillExchangeGenerations(o) { return skillExchangePost('generations', o); }
@@ -1302,7 +1303,7 @@ const Harness = (() => {
     studyProposals,
     threadProposals, threadTurnin,
     agentSkills, agentSkillsRead, agentSkillManage, agentSkillAllow,
-    skillExchangeInspect, skillExchangeRegistry, skillExchangeDiscover, skillExchangeRegistries, skillExchangeImport, skillExchangeInstall, skillExchangeCheck,
+    skillExchangeInspect, skillExchangeRegistry, skillExchangeDiscover, skillExchangeRegistries, skillExchangeImport, skillExchangeInstall, skillExchangeCheck, skillExchangeCheckRegistry,
     skillExchangeExport, skillExchangePublishHandoff, skillExchangeGenerations, skillExchangeRollback,
     api,
     apiToken: ensureApiToken,
