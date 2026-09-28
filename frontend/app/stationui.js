@@ -3265,6 +3265,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
         '<input id="sk-registry-query" type="search" autocomplete="off" placeholder="search or browse all">' +
         '<button id="sk-registry-search" class="consent-btn" type="button">BROWSE</button>' +
         '<button id="sk-registry-discover" class="consent-btn" type="button">DISCOVER SITE</button>' +
+        '<button id="sk-registry-updates" class="consent-btn" type="button">CHECK INSTALLED</button>' +
         '<button id="sk-registry-save" class="consent-btn" type="button">SAVE TAP</button></div><div id="sk-registry-sources"></div><div id="sk-registry-results"></div></div>' +
       '<div id="sk-exchange-preview" class="sk-exchange-preview" role="status" aria-live="polite"><div class="sk-loading">Paste a source to inspect its instructions, provenance, and guard verdict.</div></div>';
     /* Fill the LIVE VOICE section from the sidecar's real voice list and persist the pick.
@@ -3558,7 +3559,7 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
       else host.innerHTML = '<div class="sk-exchange-note bad">' + esc((r && r.error) || 'That package could not be inspected.') + '</div>';
     });
     const registryUrl = $('#sk-registry-url'), registryQuery = $('#sk-registry-query'), registryButton = $('#sk-registry-search'), registryResults = $('#sk-registry-results');
-    const registrySave = $('#sk-registry-save'), registryDiscover = $('#sk-registry-discover'), registrySources = $('#sk-registry-sources');
+    const registrySave = $('#sk-registry-save'), registryDiscover = $('#sk-registry-discover'), registryUpdates = $('#sk-registry-updates'), registrySources = $('#sk-registry-sources');
     const renderSources = sources => {
       if (!registrySources) return;
       registrySources.innerHTML = (sources || []).map((source, i) => '<button class="consent-btn" data-tap-use="' + i + '">' + esc(source.label || source.url) + ' · COMMUNITY</button><button class="consent-btn" data-tap-remove="' + i + '">×</button>').join('');
@@ -3583,6 +3584,55 @@ const StationUI = typeof document === 'undefined' ? {} : (() => {
       registryResults.querySelectorAll('[data-registry-entry]').forEach(entryButton => entryButton.addEventListener('click', () => {
         const entry = r.entries[Number(entryButton.dataset.registryEntry)]; if (!entry) return;
         input.value = entry.sourceUrl; inspect();
+      }));
+    });
+    if (registryUpdates && registryResults && Harness.skillExchangeCheckRegistry) registryUpdates.addEventListener('click', async () => {
+      const url = String(registryUrl.value || '').trim();
+      if (!url) { registryResults.innerHTML = '<div class="sk-exchange-note bad">Enter or discover a registry URL first.</div>'; return; }
+      registryUpdates.classList.add('busy'); registryUpdates.textContent = 'CHECKING…';
+      registryResults.innerHTML = '<div class="sk-loading">comparing installed package digests with registry releases…</div>';
+      const r = await Harness.skillExchangeCheckRegistry({ agentId, url, query: registryQuery && registryQuery.value });
+      registryUpdates.classList.remove('busy'); registryUpdates.textContent = 'CHECK INSTALLED';
+      if (!(r && r.ok)) { registryResults.innerHTML = '<div class="sk-exchange-note bad">' + esc((r && r.error) || 'Registry update check failed.') + '</div>'; return; }
+      const counts = r.counts || {};
+      const entries = Array.isArray(r.entries) ? r.entries : [];
+      const statusText = entry => {
+        if (entry.status === 'current') return 'CURRENT';
+        if (entry.status === 'update') return 'UPDATE AVAILABLE';
+        if (entry.status === 'changed') return 'BYTES CHANGED';
+        if (entry.status === 'older') return 'REGISTRY OLDER';
+        if (entry.status === 'unknown') return 'UNVERIFIED';
+        return 'NOT INSTALLED';
+      };
+      registryResults.innerHTML =
+        '<div class="sk-attr">' + esc(r.name || 'Registry') + ' · ' +
+          esc(String(counts.current || 0)) + ' current · ' +
+          esc(String(counts.update || 0)) + ' update(s) · ' +
+          esc(String(counts.changed || 0)) + ' changed · ' +
+          esc(String(counts.notInstalled || 0)) + ' not installed</div>' +
+        entries.map((entry, i) => {
+          const actionable = entry.installedId && (entry.status === 'update' || entry.status === 'changed' || entry.status === 'current');
+          const label = actionable ? '<button class="consent-btn" data-registry-update="' + i + '">' + esc(entry.name) + '</button>' : '<span class="consent-btn" aria-disabled="true">' + esc(entry.name) + '</span>';
+          return '<div class="sk-attr">' + label + ' <span class="sk-badge ' +
+            (entry.status === 'current' ? 'have' : ((entry.status === 'update' || entry.status === 'changed') ? 'want' : 'free')) + '">' +
+            esc(statusText(entry)) + '</span> ' +
+            (entry.installedVersion ? 'installed v' + esc(entry.installedVersion) + ' → ' : '') +
+            (entry.version ? 'registry v' + esc(entry.version) : '') +
+            (entry.pinned ? ' · PINNED' : '') + (entry.packageDiverged ? ' · LOCAL CHANGES' : '') + '</div>';
+        }).join('');
+      registryResults.querySelectorAll('[data-registry-update]').forEach(updateButton => updateButton.addEventListener('click', async () => {
+        const entry = entries[Number(updateButton.dataset.registryUpdate)]; if (!entry) return;
+        updateButton.classList.add('busy'); updateButton.textContent = 'REVIEWING…';
+        const checked = await Harness.skillExchangeCheck({
+          agentId, id: entry.installedId, sourceUrl: entry.sourceUrl,
+          expectedDigest: entry.digest, expectedVersion: entry.version
+        });
+        updateButton.classList.remove('busy'); updateButton.textContent = entry.name;
+        const previewHost = $('#sk-exchange-preview');
+        if (checked && checked.ok && checked.preview && previewHost) {
+          renderSkillExchangePreview(previewHost, checked.preview, agentId, { update: true });
+          previewHost.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else notify((checked && checked.error) || 'Registry update review was refused.', 'warn');
       }));
     });
     if (registryDiscover && registryResults && Harness.skillExchangeDiscover) registryDiscover.addEventListener('click', async () => {
