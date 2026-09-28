@@ -349,7 +349,10 @@ function makeClaudeCodeProvider(opts) {
       context_length: contextWindow,
       pricing: null,
       supportsTools: false,
-      supportsReasoning: true
+      supportsReasoning: true,
+      reasoningEfforts: ['none'],
+      defaultReasoningLevel: 'none',
+      reasoningNote: 'Claude Code v0.1 uses the CLI model default; StarNet does not control Claude reasoning effort.'
     }];
   }
 
