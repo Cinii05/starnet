@@ -4,6 +4,7 @@ const { EventEmitter } = require('node:events');
 const { Readable } = require('node:stream');
 const A = require('./_assert.js');
 const C = require('../sidecar/providers/claude-code.js');
+const ErrorClass = require('../sidecar/providers/errorClass.js');
 
 function childWith(stdoutText, stderrText, opts) {
   opts = opts || {};
@@ -261,6 +262,16 @@ module.exports = (async () => {
     A.eq(models.length, 1, 'v0.1 exposes exactly one Claude model');
     A.eq(models[0].id, 'sonnet', 'v0.1 model catalog is Sonnet-only');
     A.eq(JSON.stringify(models[0].reasoningEfforts), JSON.stringify(['none']), 'v0.1 exposes no fake reasoning-effort dial');
+  }
+
+  {
+    const classify = (code, message) => ErrorClass.classifyApiError(Object.assign(new Error(message || code), { code }), {});
+    A.eq(classify('CLAUDE_CODE_RATE_LIMITED').reason, 'rate_limit', 'StarNet classifies Claude rate limits');
+    A.eq(classify('CLAUDE_CODE_SUBSCRIPTION_LIMIT').reason, 'quota_exhausted', 'StarNet classifies Claude subscription limits');
+    A.eq(classify('CLAUDE_CODE_NOT_AUTHENTICATED').reason, 'auth', 'StarNet classifies Claude auth failures');
+    A.eq(classify('CLAUDE_CODE_TIMEOUT').reason, 'timeout', 'StarNet classifies Claude timeout');
+    A.eq(classify('CLAUDE_CODE_PROTOCOL_ERROR').reason, 'format_error', 'StarNet classifies Claude protocol failures');
+    A.eq(classify('CLAUDE_CODE_NOT_AVAILABLE').reason, 'local_error', 'StarNet classifies missing local Claude runtime');
   }
 
   A.report('provider.claude-code.test');
