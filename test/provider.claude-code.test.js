@@ -164,5 +164,104 @@ module.exports = (async () => {
     A.eq(code, 'CLAUDE_CODE_TOOL_PROTOCOL_VIOLATION', 'unexpected Claude-side tools fail closed');
   }
 
+
+  {
+    const calls = [];
+    const spawn = queueSpawn([
+      { stdout: '2.1.263\n' },
+      { stdout: JSON.stringify({ loggedIn:false, authMethod:'claude.ai', apiProvider:'firstParty' }) + '\n' }
+    ], calls);
+    const h = await C.healthCheckClaudeCode({ spawn, executable:'claude-test' });
+    A.eq(h.state, 'NOT_SIGNED_IN', 'signed-out Claude Code is not ready');
+    A.eq(h.ready, false, 'signed-out health is false');
+  }
+
+  {
+    const calls = [];
+    const malformed = '{"type":"system","subtype":"init","tools":[],"mcp_servers":[]}\n{not-json}\n';
+    const spawn = queueSpawn([
+      { stdout:'2.1.263\n' },
+      { stdout:READY_AUTH + '\n' },
+      { stdout:malformed }
+    ], calls);
+    const p = C.makeClaudeCodeProvider({ spawn, executable:'claude-test' });
+    let code = '';
+    try { for await (const _ of p.stream({ model:'sonnet', messages:[{role:'user',content:'x'}] })) {} }
+    catch (e) { code = e.code; }
+    A.eq(code, 'CLAUDE_CODE_PROTOCOL_ERROR', 'malformed stream-json fails closed');
+  }
+
+  {
+    const errorStream = (result) => [
+      JSON.stringify({ type:'system', subtype:'init', tools:[], mcp_servers:[], model:'claude-sonnet-5' }),
+      JSON.stringify({ type:'result', subtype:'error', is_error:true, result, usage:{}, modelUsage:{} })
+    ].join('\n') + '\n';
+
+    const rateSpawn = queueSpawn([
+      { stdout:'2.1.263\n' }, { stdout:READY_AUTH + '\n' }, { stdout:errorStream('Rate limit reached') }
+    ], []);
+    const rate = C.makeClaudeCodeProvider({ spawn:rateSpawn, executable:'claude-test' });
+    let rateCode = '';
+    try { for await (const _ of rate.stream({ model:'sonnet', messages:[{role:'user',content:'x'}] })) {} }
+    catch (e) { rateCode = e.code; }
+    A.eq(rateCode, 'CLAUDE_CODE_RATE_LIMITED', 'rate-limit result gets a typed provider error');
+
+    const limitSpawn = queueSpawn([
+      { stdout:'2.1.263\n' }, { stdout:READY_AUTH + '\n' }, { stdout:errorStream('Weekly usage limit reached') }
+    ], []);
+    const limit = C.makeClaudeCodeProvider({ spawn:limitSpawn, executable:'claude-test' });
+    let limitCode = '';
+    try { for await (const _ of limit.stream({ model:'sonnet', messages:[{role:'user',content:'x'}] })) {} }
+    catch (e) { limitCode = e.code; }
+    A.eq(limitCode, 'CLAUDE_CODE_SUBSCRIPTION_LIMIT', 'subscription allowance gets a typed provider error');
+  }
+
+  {
+    let target = null, taskkillSeen = false;
+    const spawn = (exe, args) => {
+      if (args[0] === '--version') return childWith('2.1.263\n', '');
+      if (args[0] === 'auth') return childWith(READY_AUTH + '\n', '');
+      if (String(exe).toLowerCase().endsWith('taskkill.exe')) {
+        taskkillSeen = true;
+        if (target) {
+          target.killed = true;
+          try { target.stdout.destroy(); } catch (_) {}
+          setImmediate(() => target.emit('close', 1, 'SIGTERM'));
+        }
+        return childWith('', '');
+      }
+      target = childWith('', '', { deferClose:true });
+      target.stdout = new Readable({ read() {} });
+      target.kill = () => {
+        target.killed = true;
+        try { target.stdout.destroy(); } catch (_) {}
+        setImmediate(() => target.emit('close', 1, 'SIGTERM'));
+        return true;
+      };
+      return target;
+    };
+    const p = C.makeClaudeCodeProvider({ spawn, executable:'claude-test' });
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 10);
+    const events = [];
+    for await (const e of p.stream({ model:'sonnet', messages:[{role:'user',content:'cancel me'}], signal:ac.signal })) events.push(e);
+    A.eq(events.length, 0, 'cancelled run produces no late provider events');
+    A.ok(target && target.killed, 'cancellation terminates the owned Claude child process');
+    if (process.platform === 'win32') A.ok(taskkillSeen, 'Windows cancellation uses process-tree termination');
+  }
+
+  {
+    const calls = [];
+    const spawn = queueSpawn([
+      { stdout:'2.1.263\n' },
+      { stdout:READY_AUTH + '\n' }
+    ], calls);
+    const p = C.makeClaudeCodeProvider({ spawn, executable:'claude-test' });
+    const models = await p.listModels();
+    A.eq(models.length, 1, 'v0.1 exposes exactly one Claude model');
+    A.eq(models[0].id, 'sonnet', 'v0.1 model catalog is Sonnet-only');
+    A.eq(JSON.stringify(models[0].reasoningEfforts), JSON.stringify(['none']), 'v0.1 exposes no fake reasoning-effort dial');
+  }
+
   A.report('provider.claude-code.test');
 })();
