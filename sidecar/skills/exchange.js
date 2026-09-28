@@ -176,7 +176,19 @@ function makeSkillExchange(deps) {
     const d = stage.document;
     const bySource = findBySource(agentId, d.sourceUrl);
     const byName = skillStore.list(agentId, { includeArchived: true }).find(s => str(s.name).toLowerCase() === d.name.toLowerCase()) || null;
-    if (byName && (!bySource || byName.id !== bySource.id)) throw new Error('a different skill named "' + d.name + '" already exists');
+    let updateTarget = null;
+    if (stage.updateTarget) {
+      if (stage.updateTarget.agentId !== agentId) throw new Error('that reviewed update belongs to a different agent');
+      updateTarget = skillStore.view(agentId, stage.updateTarget.id, { includeArchived: true, bump: false });
+      if (!updateTarget) throw new Error('the installed skill changed after the update check');
+      if (updateTarget.pinned) throw new Error('this skill is pinned; unpin it before applying an upstream update');
+      if (str(updateTarget.name).toLowerCase() !== d.name.toLowerCase()) throw new Error('the reviewed update no longer matches the installed skill name');
+      const currentDigest = str(updateTarget.packageDigest || updateTarget.sourceDigest).toLowerCase();
+      if (currentDigest !== stage.updateTarget.installedDigest) throw new Error('the installed skill changed after the update check; check again');
+      if (bySource && bySource.id !== updateTarget.id) throw new Error('that update source is already attached to another skill');
+    } else if (byName && (!bySource || byName.id !== bySource.id)) {
+      throw new Error('a different skill named "' + d.name + '" already exists');
+    }
     const common = {
       agentId, name: d.name, summary: d.summary, description: d.description, body: d.body,
       category: d.category, requires: d.requires, platforms: d.platforms, createdBy: 'community',
@@ -185,27 +197,43 @@ function makeSkillExchange(deps) {
       packageDigest: stage.pkg.digest, packageBytes: stage.pkg.bytes, packageFiles: stage.pkg.files, packageDiverged: false,
       files: stage.pkg.files.filter(f => f.path !== 'SKILL.md').map(f => ({ path: f.path, encoding: 'base64', content: f.content }))
     };
-    if (bySource && packageStore && typeof packageStore.snapshot === 'function') {
-      const current = skillStore.view(agentId, bySource.id, { includeArchived: true, bump: false });
+    const prior = updateTarget || bySource;
+    if (prior && packageStore && typeof packageStore.snapshot === 'function') {
+      const current = skillStore.view(agentId, prior.id, { includeArchived: true, bump: false });
       if (current) packageStore.snapshot(current);
     }
-    const result = bySource
-      ? skillStore.manage(Object.assign({}, common, { action: 'edit', target: bySource.id }))
+    const result = prior
+      ? skillStore.manage(Object.assign({}, common, { action: 'edit', target: prior.id }))
       : skillStore.manage(Object.assign({}, common, { action: 'create' }));
     if (!result || !result.ok) throw new Error((result && result.error) || 'could not install the skill');
     stages.delete(stage.id);
-    return { ok: true, action: bySource ? 'update' : 'install', skill: result.skill, guardAction: result.skill.guardAction || stage.guardAction };
+    return { ok: true, action: prior ? 'update' : 'install', skill: result.skill, guardAction: result.skill.guardAction || stage.guardAction };
   }
   async function check(input) {
     const agentId = str(input && input.agentId) || 'agent';
     const id = str(input && input.id);
     const current = skillStore && skillStore.view(agentId, id, { includeArchived: true, bump: false });
     if (!current) throw new Error('no such installed skill');
-    if (!current.sourceUrl) throw new Error('this skill was created locally and has no update source');
-    const preview = await inspect({ url: current.sourceUrl });
+    const requestedSource = str(input && input.sourceUrl).trim();
+    const sourceUrl = requestedSource || str(current.sourceUrl).trim();
+    if (!sourceUrl) throw new Error('this skill has no update source; check it against a registry first');
+    const preview = await inspect({ url: sourceUrl });
+    const failPreview = message => { stages.delete(preview.inspectionId); throw new Error(message); };
+    if (str(preview.name).toLowerCase() !== str(current.name).toLowerCase()) failPreview('the reviewed source name does not match the installed skill');
+    const expectedDigest = str(input && input.expectedDigest).trim().toLowerCase();
+    if (expectedDigest && str(preview.packageDigest).toLowerCase() !== expectedDigest) failPreview('the fetched package digest does not match the registry entry');
+    const expectedVersion = str(input && input.expectedVersion).trim();
+    if (expectedVersion && preview.version && str(preview.version) !== expectedVersion) failPreview('the fetched package version does not match the registry entry');
+    const installedDigest = str(current.packageDigest || current.sourceDigest).toLowerCase();
+    const stage = stages.get(preview.inspectionId);
+    if (stage) {
+      if (expectedVersion && !stage.document.sourceVersion) stage.document.sourceVersion = expectedVersion;
+      stage.updateTarget = { agentId, id: current.id, installedDigest };
+    }
+    if (expectedVersion && !preview.version) preview.version = expectedVersion;
     return Object.assign({}, preview, {
-      installedId: current.id, installedDigest: current.sourceDigest || '',
-      updateAvailable: preview.sourceDigest !== str(current.sourceDigest), updateLocked: !!current.pinned,
+      installedId: current.id, installedDigest, installedVersion: str(current.sourceVersion),
+      updateAvailable: preview.packageDigest !== installedDigest, updateLocked: !!current.pinned,
       packageDiverged: !!current.packageDiverged
     });
   }
