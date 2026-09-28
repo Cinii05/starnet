@@ -243,9 +243,12 @@ module.exports = (async () => {
     };
     const p = C.makeClaudeCodeProvider({ spawn, executable:'claude-test' });
     const ac = new AbortController();
+    const hold = setInterval(() => {}, 50);   // keep the synthetic child test alive until its close event is observed
     setTimeout(() => ac.abort(), 10);
     const events = [];
-    for await (const e of p.stream({ model:'sonnet', messages:[{role:'user',content:'cancel me'}], signal:ac.signal })) events.push(e);
+    try {
+      for await (const e of p.stream({ model:'sonnet', messages:[{role:'user',content:'cancel me'}], signal:ac.signal })) events.push(e);
+    } finally { clearInterval(hold); }
     A.eq(events.length, 0, 'cancelled run produces no late provider events');
     A.ok(target && target.killed, 'cancellation terminates the owned Claude child process');
     if (process.platform === 'win32') A.ok(taskkillSeen, 'Windows cancellation uses process-tree termination');
