@@ -22,6 +22,7 @@ const KeyCTA = (() => {
   function normProv(p) {
     p = String(p || 'openrouter').trim().toLowerCase();
     if (p === 'codex' || p === 'openai-codex') return 'codex';
+    if (p === 'claude-code') return 'claude-code';
     if (p === 'grok' || p === 'grok-oauth' || p === 'supergrok') return 'grok';
     if (p === 'kimi' || p === 'moonshot' || p === 'kimi-for-coding') return 'kimi';
     if (p === 'ollama' || p === 'ollama-local') return 'ollama';
@@ -31,7 +32,7 @@ const KeyCTA = (() => {
   function providerNeedsKey(p) {
     p = normProv(p);
     // codex/grok/kimi are keyless OAuth sign-ins; ollama/custom are keyless-by-design endpoints.
-    return p !== 'codex' && p !== 'grok' && p !== 'kimi' && p !== 'ollama' && p !== 'custom';
+    return p !== 'codex' && p !== 'grok' && p !== 'kimi' && p !== 'claude-code' && p !== 'ollama' && p !== 'custom';
   }
   function activeProvider() {
     return normProv((typeof Harness !== 'undefined' && Harness.getProv) ? Harness.getProv() : 'openrouter');
@@ -57,6 +58,12 @@ const KeyCTA = (() => {
         if (typeof Harness !== 'undefined' && Harness.configured) return Harness.configured('starnet') ? modelGap() : { kind: 'unlinked', provider: p };
       } catch (_) {}
       return null;
+    }
+    if (p === 'claude-code') {
+      try {
+        if (typeof Harness !== 'undefined' && Harness.configured) return Harness.configured('claude-code') ? modelGap() : { kind: 'subscription', provider: p };
+      } catch (_) {}
+      return { kind: 'subscription', provider: p };
     }
     if (!providerNeedsKey(p)) return modelGap();
     try {
@@ -158,6 +165,8 @@ const KeyCTA = (() => {
       spokenLine = Chat.localLine(who + 'no model is selected for ' + label + '. choose a model to send a message.');
     } else if (gap.kind === 'unlinked') {
       spokenLine = Chat.localLine(who + 'i’m awake, but no brain is wired: this station isn’t linked to a STARNET account, so i can’t actually run anything yet. link one, wire a different provider, or run me free on a local model.');
+    } else if (gap.kind === 'subscription') {
+      spokenLine = Chat.localLine(who + 'i’m awake, but the local Claude Code subscription is not ready. sign in to Claude Code on this machine, then retry or choose another provider.');
     } else {
       spokenLine = Chat.localLine(who + 'i’m awake, but no brain is wired: there’s no ' + label + ' key on the station, so i can’t actually run anything yet. add one, wire a different provider, or run me free on a local model.');
     }
@@ -174,11 +183,13 @@ const KeyCTA = (() => {
   function primaryLabel(gap) {
     if (gap && gap.kind === 'nomodel') return '◇ CHOOSE MODEL';
     if (gap && gap.kind === 'unlinked') return '🔗 LINK STARNET';
+    if (gap && gap.kind === 'subscription') return '⚙ CHECK CLAUDE CODE';
     return '⚙ ADD ' + ((gap && gap.provider) || activeProvider()).toUpperCase() + ' KEY';
   }
   function bannerText(gap) {
     if (gap.kind === 'nomodel') return 'no model selected for ' + gap.provider.toUpperCase() + ' — choose a model to send a message.';
     if (gap.kind === 'unlinked') return 'your agent is awake — but this station isn’t linked to a STARNET account, so it can’t run a task yet.';
+    if (gap.kind === 'subscription') return 'your agent is awake — but the local Claude Code subscription is not ready. Sign in to Claude Code on this machine, then retry.';
     return 'your agent is awake — but it has no ' + gap.provider.toUpperCase() + ' key, so it can’t run a task yet.';
   }
 
